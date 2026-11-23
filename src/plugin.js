@@ -25,6 +25,9 @@ const DEFAULT_SETTINGS = {
   urlTemplate: "https://outlook.office365.com/mail/deeplink/read/{{id}}",
   linkTemplate: "[📧 {{subject}}]({{url}})",
   separator: "\n",
+  // A dragged folder; {{id}} is the folder ID encoded twice (see folderPathId).
+  folderUrlTemplate: "https://outlook.office365.com/mail/{{id}}",
+  folderLinkTemplate: "[📁 {{name}}]({{url}})",
   openInApp: true,
   // The Outlook app found on this computer: { appId, profile, startUrl, proxy }.
   app: null,
@@ -47,17 +50,18 @@ const DETECT_SCRIPT = [
   "}",
 ].join("\n");
 
-// Outlook names its drag types after its mail list, such as
-// "maillistitempart"; this also covers related ones it may use.
-const OUTLOOK_TYPE = /^(multi)?maillist/i;
+// Outlook names its drag types after what is dragged: "maillistitempart" for
+// emails from the message list and "mailfoldernode" for a folder. This also
+// covers related ones it may use.
+const OUTLOOK_TYPE = /^(multi)?maillist|^mailfolder/i;
 
 function isOutlookType(type) {
   return typeof type === "string" && OUTLOOK_TYPE.test(type);
 }
 
-// Reads the dragged emails from a DataTransfer. Returns [] when the drag is
-// not from Outlook, or null when it is from Outlook but names no message
-// (for example a whole conversation without its item IDs).
+// Reads the dragged emails, or folder, from a DataTransfer, as
+// { kind: "email" | "folder", … }. Returns [] when the drag is not from
+// Outlook, or null when it is from Outlook but names no email or folder.
 function readOutlookDrag(dataTransfer) {
   if (!dataTransfer) return [];
   const types = Array.from(dataTransfer.types || []);
@@ -74,8 +78,8 @@ function readOutlookDrag(dataTransfer) {
     const payload = parseJson(raw);
     if (!payload || typeof payload !== "object") continue;
     if (outlookType || Array.isArray(payload.itemIds) || Array.isArray(payload.subjects)) sawOutlook = true;
-    const emails = emailsFromPayload(payload);
-    if (emails.length) return emails;
+    const items = folderFromPayload(payload) || emailsFromPayload(payload);
+    if (items.length) return items;
   }
   return sawOutlook ? null : [];
 }
@@ -87,6 +91,17 @@ function parseJson(raw) {
   } catch (e) {
     return null;
   }
+}
+
+function folderFromPayload(payload) {
+  const id = typeof payload.folderId === "string" ? payload.folderId.trim() : "";
+  if (!id || Array.isArray(payload.itemIds)) return null;
+  const name = typeof payload.displayName === "string" ? payload.displayName.replace(/\s+/g, " ").trim() : "";
+  return [{ kind: "folder", id, name: name || "(Folder)", mailbox: mailboxAddress(payload.mailboxInfo) }];
+}
+
+function mailboxAddress(info) {
+  return info && typeof info.mailboxSmtpAddress === "string" ? info.mailboxSmtpAddress : "";
 }
 
 function emailsFromPayload(payload) {
@@ -101,10 +116,11 @@ function emailsFromPayload(payload) {
     const mailbox = mailboxes[i] || fallbackMailbox || {};
     const messageId = typeof messageIds[i] === "string" && messageIds[i].startsWith("<") ? messageIds[i] : "";
     emails.push({
+      kind: "email",
       id: id.trim(),
       subject: cleanSubject(subjects[i]),
       messageId,
-      mailbox: typeof mailbox.mailboxSmtpAddress === "string" ? mailbox.mailboxSmtpAddress : "",
+      mailbox: mailboxAddress(mailbox),
     });
   });
   return emails;
@@ -144,9 +160,33 @@ function formatEmail(email, settings) {
   });
 }
 
-function formatEmails(emails, settings) {
+// Outlook opens a folder at /mail/<encoded folder ID> on outlook.cloud.microsoft
+// ("=" written %3D). The Outlook app lives on outlook.office365.com, which
+// forwards there but decodes the path once on the way, and Outlook shows the
+// inbox for a folder ID with a bare "=". Encoding the ID twice survives that
+// forwarding. Tested in November 2026; if Microsoft changes the forwarding,
+// change Folder URL in the settings.
+function folderPathId(id) {
+  return encodeURIComponent(encodeURIComponent(id));
+}
+
+function formatFolder(folder, settings) {
+  const url = fill(settings.folderUrlTemplate || DEFAULT_SETTINGS.folderUrlTemplate, {
+    id: folderPathId(folder.id),
+    rawId: folder.id,
+    mailbox: encodeURIComponent(folder.mailbox),
+  });
+  return fill(settings.folderLinkTemplate || DEFAULT_SETTINGS.folderLinkTemplate, {
+    name: escapeLinkText(folder.name),
+    url,
+    id: folder.id,
+    mailbox: folder.mailbox,
+  });
+}
+
+function formatItems(items, settings) {
   const separator = settings.separator === undefined ? DEFAULT_SETTINGS.separator : settings.separator;
-  return emails.map((email) => formatEmail(email, settings)).join(separator);
+  return items.map((item) => (item.kind === "folder" ? formatFolder(item, settings) : formatEmail(item, settings))).join(separator);
 }
 
 // Where in the editor a drop at (x, y) lands, falling back to the cursor.
@@ -323,15 +363,15 @@ class OutlookEmailLinksPlugin extends Plugin {
 
   handleDrop(evt, editor) {
     if (evt.defaultPrevented) return;
-    const emails = readOutlookDrag(evt.dataTransfer);
-    if (emails === null) {
+    const items = readOutlookDrag(evt.dataTransfer);
+    if (items === null) {
       evt.preventDefault();
-      new Notice("Outlook didn't say which email this is. Drag a single message rather than a conversation.");
+      new Notice("Outlook didn't say which email or folder this is. Drag a single message rather than a conversation.");
       return;
     }
-    if (!emails.length) return;
+    if (!items.length) return;
     evt.preventDefault();
-    const text = formatEmails(emails, this.settings);
+    const text = formatItems(items, this.settings);
     const pos = dropPosition(editor, evt);
     editor.replaceRange(text, pos);
     const end = editor.offsetToPos(editor.posToOffset(pos) + text.length);
@@ -363,6 +403,8 @@ class OutlookEmailLinksSettingTab extends PluginSettingTab {
       "The address a link opens. {{id}} is the email's item ID. Use https://outlook.cloud.microsoft/… if that is where your Outlook lives.",
       "urlTemplate"
     );
+    this.text("Folder link template", "What a dropped folder becomes. Placeholders: {{name}}, {{url}}, {{id}}, {{mailbox}}.", "folderLinkTemplate");
+    this.text("Folder URL", "The address a folder link opens. {{id}} is the folder's ID.", "folderUrlTemplate");
     this.text("Between emails", "What goes between links when you drag several emails at once. \\n is a new line.", "separator");
     if (this.plugin.launcher) this.appSetting();
   }

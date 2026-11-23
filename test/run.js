@@ -14,13 +14,13 @@ Module._resolveFilename = function (request, ...rest) {
 const mainPath = path.join(__dirname, "..", "src", "plugin.js");
 const source =
   fs.readFileSync(mainPath, "utf8") +
-  "\nmodule.exports.__internals = { readOutlookDrag, formatEmails, escapeLinkText, isOutlookType, DEFAULT_SETTINGS, parseDetectedApps, urlForApp, launchArgs, AppLauncher, DETECT_SCRIPT };\n";
+  "\nmodule.exports.__internals = { readOutlookDrag, formatItems, escapeLinkText, isOutlookType, DEFAULT_SETTINGS, parseDetectedApps, urlForApp, launchArgs, AppLauncher, DETECT_SCRIPT };\n";
 const mod = new Module(mainPath, module);
 mod.filename = mainPath;
 mod.paths = Module._nodeModulePaths(path.dirname(mainPath));
 mod._compile(source, mainPath);
 const OutlookEmailLinksPlugin = mod.exports;
-const { readOutlookDrag, formatEmails, escapeLinkText, isOutlookType, DEFAULT_SETTINGS, parseDetectedApps, urlForApp, launchArgs, AppLauncher, DETECT_SCRIPT } = OutlookEmailLinksPlugin.__internals;
+const { readOutlookDrag, formatItems, escapeLinkText, isOutlookType, DEFAULT_SETTINGS, parseDetectedApps, urlForApp, launchArgs, AppLauncher, DETECT_SCRIPT } = OutlookEmailLinksPlugin.__internals;
 
 global.document = {};
 
@@ -110,6 +110,7 @@ test("reads a dragged Outlook message", () => {
   const emails = readOutlookDrag(transfer({ maillistitempart: JSON.stringify(onePayload) }));
   assert.deepStrictEqual(emails, [
     {
+      kind: "email",
       id: "AAkALgAAAAAAHYQDEapmEc2byACqAC/EWg0Ad+Pn==",
       subject: "RE: Budget [draft]",
       messageId: "<ABC123@EXAMPLE.PROD.OUTLOOK.COM>",
@@ -144,7 +145,47 @@ test("an Outlook drag without item IDs is reported, not ignored", () => {
   assert.strictEqual(readOutlookDrag(transfer({ maillistrow: JSON.stringify(payload) })), null);
 });
 
+// The shape Outlook on the web put on a drag of a folder (values made up).
+const folderPayload = {
+  itemType: "mailfoldernode",
+  folderId: "AAMkADQ5ZTAx+dq5KamS/AACXuXBmAAA=",
+  displayName: "2606 Projects [old]",
+  treeType: "primaryFolderTree",
+  mailboxInfo: mailbox,
+  parentFolderId: "AAMkParent=",
+  itemData: { treeType: "primaryFolderTree", mailboxInfo: mailbox, draggedFolderId: "AAMkADQ5ZTAx+dq5KamS/AACXuXBmAAA=" },
+};
+
+test("reads a dragged Outlook folder", () => {
+  assert.deepStrictEqual(readOutlookDrag(transfer({ mailfoldernode: JSON.stringify(folderPayload) })), [
+    { kind: "folder", id: "AAMkADQ5ZTAx+dq5KamS/AACXuXBmAAA=", name: "2606 Projects [old]", mailbox: "me@example.com" },
+  ]);
+});
+
+test("formats a folder link with an encoded ID and escaped name", () => {
+  const items = readOutlookDrag(transfer({ mailfoldernode: JSON.stringify(folderPayload) }));
+  assert.strictEqual(
+    formatItems(items, DEFAULT_SETTINGS),
+    "[📁 2606 Projects \\[old\\]](https://outlook.office365.com/mail/AAMkADQ5ZTAx%252Bdq5KamS%252FAACXuXBmAAA%253D)"
+  );
+});
+
+test("a folder link keeps its double encoding when sent to the app", () => {
+  const link = "https://outlook.office365.com/mail/AAMk%252Bdq5%253D";
+  assert.strictEqual(urlForApp(link, foundApp), link);
+});
+
+test("dropping a folder inserts its link", async () => {
+  const plugin = await loadedPlugin({ folderLinkTemplate: "{{name}} <{{url}}>" });
+  const editor = fakeEditor("");
+  const evt = dropEvent({ mailfoldernode: JSON.stringify(folderPayload) });
+  plugin.events["editor-drop"](evt, editor);
+  assert.ok(evt.defaultPrevented);
+  assert.strictEqual(editor.text, "2606 Projects \\[old\\] <https://outlook.office365.com/mail/AAMkADQ5ZTAx%252Bdq5KamS%252FAACXuXBmAAA%253D>");
+});
+
 test("knows Outlook's drag type names", () => {
+  assert.ok(isOutlookType("mailfoldernode"));
   assert.ok(isOutlookType("maillistitempart"));
   assert.ok(isOutlookType("multimaillistmessagerows"));
   assert.ok(!isOutlookType("text/plain"));
@@ -154,7 +195,7 @@ test("knows Outlook's drag type names", () => {
 test("formats a link with an encoded ID and escaped subject", () => {
   const [email] = readOutlookDrag(transfer({ maillistitempart: JSON.stringify(onePayload) }));
   assert.strictEqual(
-    formatEmails([email], DEFAULT_SETTINGS),
+    formatItems([email], DEFAULT_SETTINGS),
     "[📧 RE: Budget \\[draft\\]](https://outlook.office365.com/mail/deeplink/read/AAkALgAAAAAAHYQDEapmEc2byACqAC%2FEWg0Ad%2BPn%3D%3D)"
   );
 });
@@ -167,7 +208,7 @@ test("templates can use every placeholder", () => {
     separator: "\n",
   };
   assert.strictEqual(
-    formatEmails([email], settings),
+    formatItems([email], settings),
     "Hi https://outlook.cloud.microsoft/mail/me%40example.com/id/a%2Fb a/b <m@x> me@example.com {{unknown}}"
   );
 });

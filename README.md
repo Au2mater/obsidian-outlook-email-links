@@ -10,6 +10,13 @@ Drag an email from Outlook on the web, or the Outlook app installed from it
 Clicking the link opens the email in Outlook. Drag several selected emails at
 once and each gets its own line.
 
+Drag a folder from Outlook's folder pane and you get a link that opens that
+folder:
+
+```markdown
+[📁 01 Projects](https://outlook.office365.com/mail/AAMkAD…)
+```
+
 - **No sign-in and no network.** Outlook puts the email's subject and ID on
   the drag; the plugin turns those into a link. It never contacts Microsoft
   and copies nothing of the email but what the link template asks for.
@@ -68,6 +75,8 @@ on other systems, links open in your browser.
 | --- | --- | --- |
 | Link template | `[📧 {{subject}}]({{url}})` | `{{subject}}`, `{{url}}`, `{{id}}`, `{{messageId}}`, `{{mailbox}}` |
 | Email URL | `https://outlook.office365.com/mail/deeplink/read/{{id}}` | `{{id}}` is the URL-encoded item ID, `{{rawId}}` the ID as is; also `{{mailbox}}`, `{{messageId}}` |
+| Folder link template | `[📁 {{name}}]({{url}})` | `{{name}}`, `{{url}}`, `{{id}}`, `{{mailbox}}` |
+| Folder URL | `https://outlook.office365.com/mail/{{id}}` | `{{id}}` is the folder ID URL-encoded twice (see below), `{{rawId}}` the ID as is |
 | Between emails | new line | Put between links when several emails are dropped. |
 | Open links in the Outlook app | on | Windows only. |
 
@@ -77,6 +86,11 @@ dragged from.
 
 ## Limits
 
+- Folder links rely on how Outlook's addresses forward. `outlook.office365.com`
+  forwards to `outlook.cloud.microsoft` and decodes the address once on the
+  way, so the folder ID is encoded twice to arrive the way Outlook expects.
+  If Microsoft changes that forwarding, folder links open the inbox instead,
+  and **Folder URL** needs changing; email links are not affected.
 - Only Outlook on the web and the apps built on it (the PWA, new Outlook for
   Windows) put the email's ID on a drag. Classic Outlook for Windows drags a
   file instead, which this plugin ignores.
