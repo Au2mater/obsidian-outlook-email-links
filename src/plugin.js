@@ -217,20 +217,30 @@ class AppLauncher {
     const app = await this.app();
     const url = app && urlForApp(link, app);
     if (!url) return false;
-    try {
-      await this.system.execFile(app.proxy, launchArgs(app, url));
-      return true;
-    } catch (e) {
-      console.warn("Outlook Email Links: could not open the Outlook app", e);
-      this.plugin.settings.app = null;
-      await this.plugin.saveSettings();
-      return false;
+    // Edge's launcher is in one of a few known places; the first that starts
+    // is remembered. No file is read to find it.
+    for (const proxy of app.proxy ? [app.proxy] : this.system.edgeProxies()) {
+      try {
+        await this.system.execFile(proxy, launchArgs(app, url));
+        if (app.proxy !== proxy) {
+          app.proxy = proxy;
+          await this.plugin.saveSettings();
+        }
+        return true;
+      } catch (e) {
+        if (e && e.code === "ENOENT") continue;
+        console.warn("Outlook Email Links: could not open the Outlook app", e);
+        break;
+      }
     }
+    this.plugin.settings.app = null;
+    await this.plugin.saveSettings();
+    return false;
   }
 
   async app() {
     const saved = this.plugin.settings.app;
-    if (saved && this.system.exists(saved.proxy)) return saved;
+    if (saved && saved.appId) return saved;
     if (this.missing) return null;
     return this.detect();
   }
@@ -238,9 +248,7 @@ class AppLauncher {
   async detect() {
     let app = null;
     try {
-      const proxy = this.system.edgeProxy();
-      const [found] = proxy ? parseDetectedApps(await this.system.powershell(DETECT_SCRIPT)) : [];
-      if (found) app = Object.assign(found, { proxy });
+      [app = null] = parseDetectedApps(await this.system.powershell(DETECT_SCRIPT));
     } catch (e) {
       console.warn("Outlook Email Links: could not look for the Outlook app", e);
     }
@@ -252,20 +260,20 @@ class AppLauncher {
 }
 
 // What the launcher needs from Windows, kept apart so tests can stand in.
+// It runs two programs and nothing else: PowerShell, once, to find the app,
+// and Edge's msedge_proxy.exe to open a link in it. No shell is involved, so
+// a link is passed as one argument and cannot run commands.
 function windowsSystem() {
   const childProcess = require("child_process");
-  const fs = require("fs");
-  const path = require("path");
   const run = (file, args) =>
     new Promise((resolve, reject) => {
       childProcess.execFile(file, args, { windowsHide: true, timeout: 20000 }, (error, stdout) => (error ? reject(error) : resolve(stdout)));
     });
   return {
-    exists: (file) => Boolean(file) && fs.existsSync(file),
-    edgeProxy() {
-      const roots = [process.env["ProgramFiles(x86)"], process.env.ProgramFiles, process.env.LOCALAPPDATA].filter(Boolean);
-      return roots.map((root) => path.join(root, "Microsoft", "Edge", "Application", "msedge_proxy.exe")).find((file) => fs.existsSync(file)) || null;
-    },
+    edgeProxies: () =>
+      [process.env["ProgramFiles(x86)"], process.env.ProgramFiles, process.env.LOCALAPPDATA]
+        .filter(Boolean)
+        .map((root) => `${root}\\Microsoft\\Edge\\Application\\msedge_proxy.exe`),
     // Encoded, so quotes in the script survive Windows' command-line rules.
     powershell: (script) =>
       run("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")]),

@@ -23,6 +23,25 @@ once and each gets its own line.
 This plugin is not made by or affiliated with Microsoft. Outlook is a
 trademark of Microsoft.
 
+## Disclosures
+
+- **Network use:** none. The plugin makes no network requests.
+- **Programs it runs (Windows only):** to open links in the Outlook app, the
+  plugin runs two programs with Node's `child_process`, which is why
+  Obsidian's plugin review warns about shell execution:
+  - `powershell.exe`, once, to ask Windows which Outlook apps Edge has
+    installed (`Get-AppxPackage`, reading each Outlook app's
+    `AppxManifest.xml`). It runs again only when you select **Find app**.
+  - Edge's `msedge_proxy.exe`, to open a link in the app.
+
+  Both run without a shell, and the link is passed as a single argument, so
+  a link can't run commands. Nothing runs on other systems, and nothing runs
+  if you turn off **Open links in the Outlook app** before your first click.
+- **Files:** the plugin reads and writes no files itself beyond its own
+  settings. The app it found (app ID, browser profile, start address and the
+  path of `msedge_proxy.exe`) is saved in the plugin's `data.json`.
+- **No telemetry, ads, payments or account.**
+
 ## Opening links in the Outlook app
 
 On Windows, clicking an Outlook link opens it in the Outlook app you

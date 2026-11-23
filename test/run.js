@@ -267,15 +267,15 @@ function fakeSystem(options = {}) {
   const calls = { powershell: 0, launches: [] };
   return {
     calls,
-    exists: (file) => file === PROXY,
-    edgeProxy: () => (options.noEdge ? null : PROXY),
+    edgeProxies: () => (options.noEdge ? [] : ["C:\\Missing\\msedge_proxy.exe", PROXY]),
     async powershell(script) {
       calls.powershell++;
       assert.strictEqual(script, DETECT_SCRIPT);
       return options.output === undefined ? "#< CLIXML\r\n" + detectedLine + "\r\n<Objs/>" : options.output;
     },
     async execFile(file, args) {
-      if (options.launchFails) throw new Error("ENOENT");
+      if (options.launchFails) throw new Error("Access denied");
+      if (file !== PROXY) throw Object.assign(new Error("not found"), { code: "ENOENT" });
       calls.launches.push([file, args]);
       return "";
     },
@@ -324,7 +324,7 @@ test("without the app, links go to the browser and PowerShell runs once", async 
   assert.strictEqual(system.calls.powershell, 1);
   const noEdge = fakeSystem({ noEdge: true });
   assert.strictEqual(await new AppLauncher(plugin, noEdge).open("https://outlook.office.com/mail/x"), false);
-  assert.strictEqual(noEdge.calls.powershell, 0);
+  assert.strictEqual(noEdge.calls.launches.length, 0);
 });
 
 test("a failed launch forgets the app and lets the browser open the link", async () => {
