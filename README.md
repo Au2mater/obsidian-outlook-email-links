@@ -22,10 +22,10 @@ folder:
   and copies nothing of the email but what the link template asks for.
 - **Opens in the Outlook app** on Windows, if you installed Outlook as an
   app from Edge (see below).
-- **Links should survive moving the email.** The ID Outlook hands over
-  looks like an Exchange *immutable* ID, which Microsoft documents as staying
-  the same when an email moves to another folder in the same mailbox.
-- Drops that are not Outlook emails are left to Obsidian as usual.
+- **Links survive moving the email** to another folder. The ID Outlook hands
+  over is an Exchange *immutable* ID, which stays the same while the email
+  stays in the same mailbox.
+- Drops that are not Outlook emails or folders are left to Obsidian as usual.
 
 This plugin is not made by or affiliated with Microsoft. Outlook is a
 trademark of Microsoft.
@@ -36,17 +36,21 @@ trademark of Microsoft.
 - **Programs it runs (Windows only):** to open links in the Outlook app, the
   plugin runs two programs with Node's `child_process`, which is why
   Obsidian's plugin review warns about shell execution:
-  - `powershell.exe`, once, to ask Windows which Outlook apps Edge has
-    installed (`Get-AppxPackage`, reading each Outlook app's
-    `AppxManifest.xml`). It runs again only when you select **Find app**.
+  - `powershell.exe`, to ask Windows which Outlook apps Edge has installed
+    (`Get-AppxPackage`, reading each Outlook app's `AppxManifest.xml`). It
+    runs on the first Outlook link you click, and again only when you select
+    **Find app**, when opening the app fails, or, if no app was found, on
+    the first click after Obsidian restarts.
   - Edge's `msedge_proxy.exe`, to open a link in the app.
 
   Both run without a shell, and the link is passed as a single argument, so
   a link can't run commands. Nothing runs on other systems, and nothing runs
   if you turn off **Open links in the Outlook app** before your first click.
 - **Files:** the plugin reads and writes no files itself beyond its own
-  settings. The app it found (app ID, browser profile, start address and the
-  path of `msedge_proxy.exe`) is saved in the plugin's `data.json`.
+  settings in `data.json`. The app it found (app ID, browser profile, start
+  address and which `msedge_proxy.exe` started it) is kept in Obsidian's
+  local storage on this computer, not in the vault, so it doesn't sync to
+  other computers.
 - **No telemetry, ads, payments or account.**
 
 ## Opening links in the Outlook app
@@ -57,12 +61,14 @@ on other systems, links open in your browser.
 
 - The first click looks for the app, which takes a second or two. The plugin
   asks Windows, with PowerShell, which Outlook apps Edge has installed, and
-  remembers the one it finds in `data.json`. **Find app** in the settings
+  remembers the one it finds on this computer. **Find app** in the settings
   looks again, for example after you reinstall the app.
 - It opens the app with Edge's `msedge_proxy.exe`, the way the app's own
-  shortcuts do, and moves the link to the app's address, such as
+  shortcuts do. Only `msedge_proxy.exe` in Edge's own install folders is
+  ever run. It moves the link to the app's address, such as
   `outlook.office365.com`. Links made with another Outlook address, such as
-  `outlook.office.com`, also open in the app.
+  `outlook.office.com`, or copied from Outlook's address bar
+  (`outlook.cloud.microsoft`), also open in the app.
 - This covers every work or school Outlook mail link in your notes
   (addresses with `/mail/`), not only the ones this plugin made. Calendar
   links and personal Outlook (`outlook.live.com`) links open in the browser.
@@ -91,12 +97,16 @@ dragged from.
   way, so the folder ID is encoded twice to arrive the way Outlook expects.
   If Microsoft changes that forwarding, folder links open the inbox instead,
   and **Folder URL** needs changing; email links are not affected.
-- Only Outlook on the web and the apps built on it (the PWA, new Outlook for
-  Windows) put the email's ID on a drag. Classic Outlook for Windows drags a
-  file instead, which this plugin ignores.
+- Tested with Outlook on the web installed as an app from Edge. New Outlook
+  for Windows is built on the same code but is untested. Classic Outlook for
+  Windows drags a file instead, which this plugin ignores.
+- Folder links are tested for folders in your own mailbox, not in shared
+  mailboxes.
 - An email moved to another mailbox, such as an online archive, gets a new
   ID, and its old link stops working.
-- A link opens the email only for someone signed in to that mailbox.
+- A link opens the email only for someone signed in to that mailbox. Links
+  don't name the account, so with several Microsoft accounts in Edge, an
+  email from another account than the app's may not open.
 
 ## Install
 
@@ -116,5 +126,5 @@ npm test
 ```
 
 To release, bump `version` in `manifest.json` and `package.json`, add it to
-`versions.json` and commit, then push a tag such as `0.1.0`; the workflow
+`versions.json` and commit, then push a tag such as `0.3.0`; the workflow
 builds, tests and publishes the release.

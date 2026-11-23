@@ -1,6 +1,6 @@
-// Outlook Email Links: drag an email from Outlook on the web (or its PWA)
-// onto a note, and a Markdown link to that email is inserted where it lands.
-// Clicking the link opens the email in Outlook.
+// Outlook Email Links: drag an email or a folder from Outlook on the web (or
+// its PWA) onto a note, and a Markdown link to it is inserted where it lands.
+// Clicking the link opens the email or folder in Outlook.
 //
 // Outlook puts a JSON description of the dragged messages on the drag, under
 // a custom type such as "maillistitempart". It holds each message's subject,
@@ -12,8 +12,9 @@
 // On Windows, clicking an Outlook link opens it in the Outlook app installed
 // from Edge (the PWA) when there is one, instead of a browser tab. Edge
 // registers such apps as Windows packages; the plugin finds Outlook's once,
-// with PowerShell, on the first click, and launches it at the link through
-// Edge's msedge_proxy.exe, the way the app's own shortcuts do.
+// with PowerShell, on the first click, remembers it on this device, and
+// launches it at the link through Edge's msedge_proxy.exe, the way the app's
+// own shortcuts do.
 //
 // Plain JavaScript with no dependencies: `npm run build` checks this file and
 // writes it unchanged to main.js, the file Obsidian loads (see README.md).
@@ -29,9 +30,13 @@ const DEFAULT_SETTINGS = {
   folderUrlTemplate: "https://outlook.office365.com/mail/{{id}}",
   folderLinkTemplate: "[📁 {{name}}]({{url}})",
   openInApp: true,
-  // The Outlook app found on this computer: { appId, profile, startUrl, proxy }.
-  app: null,
 };
+
+// Where the Outlook app found on this computer is remembered:
+// { appId, profile, startUrl, proxy }. It belongs to the device, not the
+// vault, so it is kept in the app's local storage rather than in data.json,
+// which syncs with the vault to other computers.
+const APP_STORAGE_KEY = "outlook-email-links:app";
 
 // Work and school Outlook's addresses. Only mail links on these are opened in
 // the app; calendar links and personal Outlook (outlook.live.com) are not.
@@ -67,8 +72,8 @@ function readOutlookDrag(dataTransfer) {
   const types = Array.from(dataTransfer.types || []);
   let sawOutlook = false;
   for (const type of types) {
-    const outlookType = isOutlookType(type);
-    if (!outlookType && type !== "text/plain") continue;
+    if (!isOutlookType(type)) continue;
+    sawOutlook = true;
     let raw;
     try {
       raw = dataTransfer.getData(type);
@@ -77,7 +82,6 @@ function readOutlookDrag(dataTransfer) {
     }
     const payload = parseJson(raw);
     if (!payload || typeof payload !== "object") continue;
-    if (outlookType || Array.isArray(payload.itemIds) || Array.isArray(payload.subjects)) sawOutlook = true;
     const items = folderFromPayload(payload) || emailsFromPayload(payload);
     if (items.length) return items;
   }
@@ -137,7 +141,7 @@ function escapeLinkText(text) {
 }
 
 function fill(template, values) {
-  return template.replace(/\{\{(\w+)\}\}/g, (match, key) => (key in values ? values[key] : match));
+  return template.replace(/\{\{(\w+)\}\}/g, (match, key) => (Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match));
 }
 
 function emailUrl(email, settings) {
@@ -228,11 +232,17 @@ function safeOutlookUrl(value) {
 }
 
 // The link moved to the app's own host, so it opens inside the app's window
-// rather than in one with a "this page is outside the app" bar.
+// rather than in one with a "this page is outside the app" bar. A link on
+// outlook.cloud.microsoft, such as one copied from Outlook's address bar, is
+// encoded once more, because the app's host forwards back there and decodes
+// the path once on the way (see folderPathId).
 function urlForApp(link, app) {
   const url = safeOutlookUrl(link);
   if (!url) return null;
   const start = new URL(app.startUrl);
+  if (url.hostname.toLowerCase() === "outlook.cloud.microsoft" && start.hostname.toLowerCase() !== "outlook.cloud.microsoft") {
+    url.pathname = url.pathname.replace(/%/g, "%25");
+  }
   url.protocol = start.protocol;
   url.host = start.host;
   return url.href;
@@ -258,14 +268,13 @@ class AppLauncher {
     const url = app && urlForApp(link, app);
     if (!url) return false;
     // Edge's launcher is in one of a few known places; the first that starts
-    // is remembered. No file is read to find it.
-    for (const proxy of app.proxy ? [app.proxy] : this.system.edgeProxies()) {
+    // is remembered. No file is read to find it, and only those places are
+    // ever run.
+    const places = this.system.edgeProxies();
+    for (const proxy of places.includes(app.proxy) ? [app.proxy] : places) {
       try {
         await this.system.execFile(proxy, launchArgs(app, url));
-        if (app.proxy !== proxy) {
-          app.proxy = proxy;
-          await this.plugin.saveSettings();
-        }
+        if (app.proxy !== proxy) this.remember(Object.assign({}, app, { proxy }));
         return true;
       } catch (e) {
         if (e && e.code === "ENOENT") continue;
@@ -273,16 +282,20 @@ class AppLauncher {
         break;
       }
     }
-    this.plugin.settings.app = null;
-    await this.plugin.saveSettings();
+    this.remember(null);
     return false;
   }
 
+  // The app found earlier on this computer, else a new search, once a session.
   async app() {
-    const saved = this.plugin.settings.app;
-    if (saved && saved.appId) return saved;
+    const saved = this.saved();
+    if (saved) return saved;
     if (this.missing) return null;
     return this.detect();
+  }
+
+  saved() {
+    return validApp(this.system.load(APP_STORAGE_KEY));
   }
 
   async detect() {
@@ -293,10 +306,22 @@ class AppLauncher {
       console.warn("Outlook Email Links: could not look for the Outlook app", e);
     }
     this.missing = !app;
-    this.plugin.settings.app = app;
-    await this.plugin.saveSettings();
+    this.remember(app);
     return app;
   }
+
+  remember(app) {
+    this.system.save(APP_STORAGE_KEY, app);
+  }
+}
+
+// A remembered app, checked the way a freshly found one is, or null.
+function validApp(app) {
+  if (!app || typeof app !== "object") return null;
+  if (typeof app.appId !== "string" || !/^[a-p]{32}$/.test(app.appId)) return null;
+  if (typeof app.profile !== "string" || !/^[\w .-]{1,64}$/.test(app.profile)) return null;
+  if (!safeOutlookUrl(app.startUrl)) return null;
+  return { appId: app.appId, profile: app.profile, startUrl: app.startUrl, proxy: typeof app.proxy === "string" ? app.proxy : "" };
 }
 
 // What the launcher needs from Windows, kept apart so tests can stand in.
@@ -318,12 +343,32 @@ function windowsSystem() {
     powershell: (script) =>
       run("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")]),
     execFile: (file, args) => run(file, args),
+    load(key) {
+      try {
+        return JSON.parse(window.localStorage.getItem(key) || "null");
+      } catch (e) {
+        return null;
+      }
+    },
+    save(key, value) {
+      try {
+        if (value) window.localStorage.setItem(key, JSON.stringify(value));
+        else window.localStorage.removeItem(key);
+      } catch (e) {
+        // Without storage the app is looked for again next session.
+      }
+    },
   };
 }
 
 class OutlookEmailLinksPlugin extends Plugin {
   async onload() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const data = (await this.loadData()) || {};
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+    // Before 0.3.0 the app found was kept in data.json; it now stays on the
+    // device. Older versions also saved every default.
+    delete this.settings.app;
+    if ("app" in data) await this.saveSettings();
     this.addSettingTab(new OutlookEmailLinksSettingTab(this.app, this));
 
     // Let an Outlook drag drop on the editor at all: without this the drop
@@ -348,16 +393,26 @@ class OutlookEmailLinksPlugin extends Plugin {
     this.launcher = new AppLauncher(this, system);
     const original = window.open;
     const plugin = this;
-    window.open = function (url, ...rest) {
+    let active = true;
+    const patched = function (url, ...rest) {
       const link = typeof url === "string" ? url : url && url.href;
-      if (!plugin.settings.openInApp || !safeOutlookUrl(link)) return original.call(this, url, ...rest);
-      plugin.launcher.open(link).then((opened) => {
-        if (!opened) original.call(window, url, ...rest);
-      });
+      if (!active || !plugin.settings.openInApp || !safeOutlookUrl(link)) return original.call(this, url, ...rest);
+      const browser = () => original.call(window, url, ...rest);
+      plugin.launcher.open(link).then(
+        (opened) => opened || browser(),
+        (e) => {
+          console.warn("Outlook Email Links: could not open the Outlook app", e);
+          browser();
+        }
+      );
       return null;
     };
+    window.open = patched;
+    // Put window.open back. If another plugin has wrapped it since, leave
+    // theirs in place and let this wrapper pass every link straight through.
     this.register(() => {
-      window.open = original;
+      active = false;
+      if (window.open === patched) window.open = original;
     });
   }
 
@@ -366,7 +421,7 @@ class OutlookEmailLinksPlugin extends Plugin {
     const items = readOutlookDrag(evt.dataTransfer);
     if (items === null) {
       evt.preventDefault();
-      new Notice("Outlook didn't say which email or folder this is. Drag a single message rather than a conversation.");
+      new Notice("Outlook didn't say which email or folder this is, so no link was added.");
       return;
     }
     if (!items.length) return;
@@ -379,8 +434,14 @@ class OutlookEmailLinksPlugin extends Plugin {
     editor.focus();
   }
 
+  // Saves only what differs from the defaults, so a later improvement to a
+  // default reaches everyone who hasn't changed that setting.
   async saveSettings() {
-    await this.saveData(this.settings);
+    const changed = {};
+    for (const key of Object.keys(DEFAULT_SETTINGS)) {
+      if (this.settings[key] !== DEFAULT_SETTINGS[key]) changed[key] = this.settings[key];
+    }
+    await this.saveData(changed);
   }
 }
 
@@ -400,7 +461,7 @@ class OutlookEmailLinksSettingTab extends PluginSettingTab {
     );
     this.text(
       "Email URL",
-      "The address a link opens. {{id}} is the email's item ID. Use https://outlook.cloud.microsoft/… if that is where your Outlook lives.",
+      "The address an email link opens. {{id}} is the email's item ID.",
       "urlTemplate"
     );
     this.text("Folder link template", "What a dropped folder becomes. Placeholders: {{name}}, {{url}}, {{id}}, {{mailbox}}.", "folderLinkTemplate");
@@ -410,7 +471,7 @@ class OutlookEmailLinksSettingTab extends PluginSettingTab {
   }
 
   appSetting() {
-    const app = this.plugin.settings.app;
+    const app = this.plugin.launcher.saved();
     new Setting(this.containerEl)
       .setName("Open links in the Outlook app")
       .setDesc(
@@ -440,7 +501,7 @@ class OutlookEmailLinksSettingTab extends PluginSettingTab {
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_SETTINGS[key].replace(/\n/g, "\\n"))
-          .setValue(this.plugin.settings[key].replace(/\n/g, "\\n"))
+          .setValue(String(this.plugin.settings[key] ?? DEFAULT_SETTINGS[key]).replace(/\n/g, "\\n"))
           .onChange(async (value) => {
             this.plugin.settings[key] = key === "separator" ? value.replace(/\\n/g, "\n") : value.trim() || DEFAULT_SETTINGS[key];
             await this.plugin.saveSettings();

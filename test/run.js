@@ -136,6 +136,9 @@ test("reads several dragged messages in order", () => {
 test("ignores drags that are not from Outlook", () => {
   assert.deepStrictEqual(readOutlookDrag(transfer({ "text/plain": "hello" })), []);
   assert.deepStrictEqual(readOutlookDrag(transfer({ "text/plain": '{"a":1}' })), []);
+  // JSON text that looks like Outlook's is still just text.
+  assert.deepStrictEqual(readOutlookDrag(transfer({ "text/plain": JSON.stringify(onePayload) })), []);
+  assert.deepStrictEqual(readOutlookDrag(transfer({ "text/plain": JSON.stringify(folderPayload) })), []);
   assert.deepStrictEqual(readOutlookDrag(transfer({ Files: "" })), []);
   assert.deepStrictEqual(readOutlookDrag(null), []);
 });
@@ -173,6 +176,15 @@ test("formats a folder link with an encoded ID and escaped name", () => {
 test("a folder link keeps its double encoding when sent to the app", () => {
   const link = "https://outlook.office365.com/mail/AAMk%252Bdq5%253D";
   assert.strictEqual(urlForApp(link, foundApp), link);
+});
+
+test("a link copied from outlook.cloud.microsoft is encoded once more for the app", () => {
+  assert.strictEqual(
+    urlForApp("https://outlook.cloud.microsoft/mail/AAMk%2Bdq5%3D", foundApp),
+    "https://outlook.office365.com/mail/AAMk%252Bdq5%253D"
+  );
+  const cloudApp = Object.assign({}, foundApp, { startUrl: "https://outlook.cloud.microsoft/mail/" });
+  assert.strictEqual(urlForApp("https://outlook.cloud.microsoft/mail/AAMk%2Bdq5%3D", cloudApp), "https://outlook.cloud.microsoft/mail/AAMk%2Bdq5%3D");
 });
 
 test("dropping a folder inserts its link", async () => {
@@ -218,6 +230,11 @@ test("a missing or blank subject reads (No subject), and whitespace collapses", 
   assert.strictEqual(readOutlookDrag(transfer({ maillistitempart: JSON.stringify(payload) }))[0].subject, "Line one line two");
   const blank = Object.assign({}, onePayload, { subjects: [] });
   assert.strictEqual(readOutlookDrag(transfer({ maillistitempart: JSON.stringify(blank) }))[0].subject, "(No subject)");
+});
+
+test("placeholders only come from the values, not from Object's prototype", () => {
+  const settings = Object.assign({}, DEFAULT_SETTINGS, { linkTemplate: "{{constructor}} {{toString}} {{subject}}" });
+  assert.strictEqual(formatItems([{ kind: "email", id: "1", subject: "Hi", messageId: "", mailbox: "" }], settings), "{{constructor}} {{toString}} Hi");
 });
 
 test("escapes brackets and backslashes in link text", () => {
@@ -306,8 +323,15 @@ const PROXY = "C:\\Edge\\msedge_proxy.exe";
 
 function fakeSystem(options = {}) {
   const calls = { powershell: 0, launches: [] };
+  const storage = Object.assign({}, options.storage);
   return {
     calls,
+    storage,
+    load: (key) => (key in storage ? JSON.parse(storage[key]) : null),
+    save(key, value) {
+      if (value) storage[key] = JSON.stringify(value);
+      else delete storage[key];
+    },
     edgeProxies: () => (options.noEdge ? [] : ["C:\\Missing\\msedge_proxy.exe", PROXY]),
     async powershell(script) {
       calls.powershell++;
@@ -349,7 +373,8 @@ test("the launcher finds the app once, saves it and opens links in it", async ()
   assert.strictEqual(await launcher.open("https://outlook.office.com/mail/deeplink/read/A"), true);
   assert.strictEqual(await launcher.open("https://outlook.cloud.microsoft/mail/deeplink/read/B"), true);
   assert.strictEqual(system.calls.powershell, 1);
-  assert.deepStrictEqual(global.__saved.app, Object.assign({}, foundApp, { proxy: PROXY }));
+  assert.deepStrictEqual(JSON.parse(system.storage["outlook-email-links:app"]), Object.assign({}, foundApp, { proxy: PROXY }));
+  assert.ok(!global.__saved || !("app" in global.__saved), "the app is not written to data.json");
   assert.deepStrictEqual(system.calls.launches.map(([file, args]) => [file, args[2]]), [
     [PROXY, "--app-launch-url-for-shortcuts-menu-item=https://outlook.office365.com/mail/deeplink/read/A"],
     [PROXY, "--app-launch-url-for-shortcuts-menu-item=https://outlook.office365.com/mail/deeplink/read/B"],
@@ -368,12 +393,39 @@ test("without the app, links go to the browser and PowerShell runs once", async 
   assert.strictEqual(noEdge.calls.launches.length, 0);
 });
 
+const remembered = (app) => ({ "outlook-email-links:app": JSON.stringify(app) });
+
 test("a failed launch forgets the app and lets the browser open the link", async () => {
-  const plugin = await loadedPlugin({ app: Object.assign({}, foundApp, { proxy: PROXY }) });
-  const system = fakeSystem({ launchFails: true });
+  const plugin = await loadedPlugin();
+  const system = fakeSystem({ launchFails: true, storage: remembered(Object.assign({}, foundApp, { proxy: PROXY })) });
   assert.strictEqual(await new AppLauncher(plugin, system).open("https://outlook.office.com/mail/x"), false);
   assert.strictEqual(system.calls.powershell, 0);
-  assert.strictEqual(plugin.settings.app, null);
+  assert.ok(!("outlook-email-links:app" in system.storage));
+});
+
+test("a remembered program outside Edge's folders is never run", async () => {
+  const plugin = await loadedPlugin();
+  const system = fakeSystem({ storage: remembered(Object.assign({}, foundApp, { proxy: "C:\\evil.exe" })) });
+  assert.strictEqual(await new AppLauncher(plugin, system).open("https://outlook.office.com/mail/x"), true);
+  assert.deepStrictEqual(system.calls.launches.map(([file]) => file), [PROXY]);
+  assert.strictEqual(system.calls.powershell, 0);
+});
+
+test("a malformed remembered app is ignored and the app looked for again", async () => {
+  const plugin = await loadedPlugin();
+  for (const bad of [{ appId: "x", profile: "Default", startUrl: foundApp.startUrl }, Object.assign({}, foundApp, { startUrl: "https://evil.example/mail/" }), Object.assign({}, foundApp, { profile: 'a" --x' })]) {
+    const system = fakeSystem({ storage: remembered(bad) });
+    assert.strictEqual(await new AppLauncher(plugin, system).open("https://outlook.office.com/mail/x"), true);
+    assert.strictEqual(system.calls.powershell, 1);
+    assert.strictEqual(system.calls.launches[0][1][1], "--app-id=pkooggnaalmfkidjmlhoelhdllpphaga");
+  }
+});
+
+test("an app kept in data.json by an older version is dropped", async () => {
+  global.__saved = undefined;
+  const plugin = await loadedPlugin({ app: Object.assign({}, foundApp, { proxy: "C:\\evil.exe" }), urlTemplate: DEFAULT_SETTINGS.urlTemplate, linkTemplate: "- {{subject}}" });
+  assert.ok(!("app" in plugin.settings));
+  assert.deepStrictEqual(global.__saved, { linkTemplate: "- {{subject}}" }, "only changed settings are kept");
 });
 
 test("on Windows, window.open sends Outlook links to the app and others on", async () => {
@@ -391,8 +443,6 @@ test("on Windows, window.open sends Outlook links to the app and others on", asy
     assert.strictEqual(plugin.launcher.system.calls.launches.length, 1);
 
     plugin.launcher.system = fakeSystem({ output: "" });
-    plugin.settings.app = null;
-    plugin.launcher.missing = false;
     window.open("https://outlook.office.com/mail/deeplink/read/B");
     await new Promise((r) => setTimeout(r, 5));
     assert.deepStrictEqual(opened, ["https://example.com/", "https://outlook.office.com/mail/deeplink/read/B"]);
@@ -408,6 +458,29 @@ test("on Windows, window.open sends Outlook links to the app and others on", asy
     assert.strictEqual(opened.length, 3);
     plugin.cleanups.forEach((fn) => fn());
     assert.strictEqual(window.open.name, "open");
+
+    // Another plugin's later wrapper is left in place on unload.
+    const again = await loadedPlugin();
+    const wrapped = window.open;
+    const theirs = (url) => wrapped(url);
+    window.open = theirs;
+    again.cleanups.forEach((fn) => fn());
+    assert.strictEqual(window.open, theirs);
+    // …and the unloaded wrapper underneath passes links straight through.
+    opened.length = 0;
+    window.open("https://outlook.office.com/mail/D");
+    assert.deepStrictEqual(opened, ["https://outlook.office.com/mail/D"]);
+
+    // An unexpected error while opening the app still opens the browser.
+    window.open = (url) => opened.push(url);
+    const failing = await loadedPlugin();
+    failing.launcher.open = async () => {
+      throw new Error("boom");
+    };
+    opened.length = 0;
+    window.open("https://outlook.office.com/mail/E");
+    await new Promise((r) => setImmediate(r));
+    assert.deepStrictEqual(opened, ["https://outlook.office.com/mail/E"]);
   } finally {
     stub.Platform.isWin = false;
   }
