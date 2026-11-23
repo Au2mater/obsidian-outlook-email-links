@@ -48,9 +48,9 @@ trademark of Microsoft.
   if you turn off **Open links in the Outlook app** before your first click.
 - **Files:** the plugin reads and writes no files itself beyond its own
   settings in `data.json`. The app it found (app ID, browser profile, start
-  address and which `msedge_proxy.exe` started it) is kept in Obsidian's
-  local storage for this vault on this computer, not in the vault, so it doesn't sync to
-  other computers.
+  address and which `msedge_proxy.exe` started it) is kept with Obsidian's
+  local storage on this computer, outside the vault's files, so it doesn't
+  sync to other computers.
 - **No telemetry, ads, payments or account.**
 
 ## Opening links in the Outlook app
