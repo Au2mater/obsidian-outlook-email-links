@@ -34,8 +34,8 @@ const DEFAULT_SETTINGS = {
 
 // Where the Outlook app found on this computer is remembered:
 // { appId, profile, startUrl, proxy }. It belongs to the device, not the
-// vault, so it is kept in the app's local storage rather than in data.json,
-// which syncs with the vault to other computers.
+// vault, so it is kept with Obsidian's loadLocalStorage/saveLocalStorage
+// rather than in data.json, which syncs with the vault to other computers.
 const APP_STORAGE_KEY = "outlook-email-links:app";
 
 // Work and school Outlook's addresses. Only mail links on these are opened in
@@ -328,8 +328,9 @@ function validApp(app) {
 // It runs two programs and nothing else: PowerShell, once, to find the app,
 // and Edge's msedge_proxy.exe to open a link in it. No shell is involved, so
 // a link is passed as one argument and cannot run commands.
-function windowsSystem() {
+function windowsSystem(app) {
   const childProcess = require("child_process");
+  const memory = {};
   const run = (file, args) =>
     new Promise((resolve, reject) => {
       childProcess.execFile(file, args, { windowsHide: true, timeout: 20000 }, (error, stdout) => (error ? reject(error) : resolve(stdout)));
@@ -343,19 +344,21 @@ function windowsSystem() {
     powershell: (script) =>
       run("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")]),
     execFile: (file, args) => run(file, args),
+    // Obsidian's own per-device storage for this vault. On a version without
+    // it, the app is kept in memory and looked for again next session.
     load(key) {
       try {
-        return JSON.parse(window.localStorage.getItem(key) || "null");
+        return typeof app.loadLocalStorage === "function" ? app.loadLocalStorage(key) : memory[key] || null;
       } catch (e) {
         return null;
       }
     },
     save(key, value) {
       try {
-        if (value) window.localStorage.setItem(key, JSON.stringify(value));
-        else window.localStorage.removeItem(key);
+        if (typeof app.saveLocalStorage === "function") app.saveLocalStorage(key, value || null);
+        else memory[key] = value || null;
       } catch (e) {
-        // Without storage the app is looked for again next session.
+        memory[key] = value || null;
       }
     },
   };
@@ -383,7 +386,7 @@ class OutlookEmailLinksPlugin extends Plugin {
 
     this.registerEvent(this.app.workspace.on("editor-drop", (evt, editor) => this.handleDrop(evt, editor)));
 
-    if (Platform.isDesktopApp && Platform.isWin) this.catchOutlookLinks(windowsSystem());
+    if (Platform.isDesktopApp && Platform.isWin) this.catchOutlookLinks(windowsSystem(this.app));
   }
 
   // Obsidian opens every external link, in any view, through window.open.

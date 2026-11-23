@@ -14,13 +14,13 @@ Module._resolveFilename = function (request, ...rest) {
 const mainPath = path.join(__dirname, "..", "src", "plugin.js");
 const source =
   fs.readFileSync(mainPath, "utf8") +
-  "\nmodule.exports.__internals = { readOutlookDrag, formatItems, escapeLinkText, isOutlookType, DEFAULT_SETTINGS, parseDetectedApps, urlForApp, launchArgs, AppLauncher, DETECT_SCRIPT };\n";
+  "\nmodule.exports.__internals = { readOutlookDrag, formatItems, escapeLinkText, isOutlookType, DEFAULT_SETTINGS, parseDetectedApps, urlForApp, launchArgs, AppLauncher, DETECT_SCRIPT, windowsSystem };\n";
 const mod = new Module(mainPath, module);
 mod.filename = mainPath;
 mod.paths = Module._nodeModulePaths(path.dirname(mainPath));
 mod._compile(source, mainPath);
 const OutlookEmailLinksPlugin = mod.exports;
-const { readOutlookDrag, formatItems, escapeLinkText, isOutlookType, DEFAULT_SETTINGS, parseDetectedApps, urlForApp, launchArgs, AppLauncher, DETECT_SCRIPT } = OutlookEmailLinksPlugin.__internals;
+const { readOutlookDrag, formatItems, escapeLinkText, isOutlookType, DEFAULT_SETTINGS, parseDetectedApps, urlForApp, launchArgs, AppLauncher, DETECT_SCRIPT, windowsSystem } = OutlookEmailLinksPlugin.__internals;
 
 global.document = {};
 
@@ -391,6 +391,25 @@ test("without the app, links go to the browser and PowerShell runs once", async 
   const noEdge = fakeSystem({ noEdge: true });
   assert.strictEqual(await new AppLauncher(plugin, noEdge).open("https://outlook.office.com/mail/x"), false);
   assert.strictEqual(noEdge.calls.launches.length, 0);
+});
+
+test("the app is kept with Obsidian's local storage, or in memory without it", () => {
+  const store = {};
+  const system = windowsSystem({
+    loadLocalStorage: (key) => store[key] ?? null,
+    saveLocalStorage(key, value) {
+      if (value === null) delete store[key];
+      else store[key] = value;
+    },
+  });
+  system.save("k", { a: 1 });
+  assert.deepStrictEqual(system.load("k"), { a: 1 });
+  system.save("k", null);
+  assert.strictEqual(system.load("k"), null);
+  assert.deepStrictEqual(store, {});
+  const old = windowsSystem({});
+  old.save("k", { a: 1 });
+  assert.deepStrictEqual(old.load("k"), { a: 1 });
 });
 
 const remembered = (app) => ({ "outlook-email-links:app": JSON.stringify(app) });
