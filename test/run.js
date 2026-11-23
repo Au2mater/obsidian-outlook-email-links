@@ -119,6 +119,30 @@ test("reads a dragged Outlook message", () => {
   ]);
 });
 
+test("reads dragged conversations as their newest message", () => {
+  // The shape Outlook put on a drag from a folder shown as conversations.
+  const payload = {
+    itemType: "multimaillistconversationrows",
+    tableViewId: "folderId:AAMk=;lVT:0;vF:All;fVF:-1",
+    tableListViewType: 0,
+    rowKeys: ["AQAAAPvpTGoBAAAA++l/KwAAAAA="],
+    subjects: ["Invoice 14.03.26"],
+    latestItemIds: ["AAkALgAAAAAAHYQDEapmEc2byACqAC/EWg0AdxPnLZAAA"],
+    mailboxInfos: [mailbox],
+    sizes: [396641],
+    haveIRM: [false],
+    itemData: { mailboxInfo: mailbox },
+  };
+  const items = readOutlookDrag(transfer({ multimaillistconversationrows: JSON.stringify(payload) }));
+  assert.deepStrictEqual(items, [
+    { kind: "email", id: "AAkALgAAAAAAHYQDEapmEc2byACqAC/EWg0AdxPnLZAAA", subject: "Invoice 14.03.26", messageId: "", mailbox: "me@example.com" },
+  ]);
+  assert.strictEqual(
+    formatItems(items, DEFAULT_SETTINGS),
+    "[📧 Invoice 14.03.26](https://outlook.office365.com/mail/deeplink/read/AAkALgAAAAAAHYQDEapmEc2byACqAC%2FEWg0AdxPnLZAAA)"
+  );
+});
+
 test("reads several dragged messages in order", () => {
   const payload = Object.assign({}, onePayload, {
     subjects: ["One", "Two"],

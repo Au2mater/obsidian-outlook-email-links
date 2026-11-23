@@ -8,7 +8,8 @@ Drag an email from Outlook on the web, or the Outlook app installed from it
 ```
 
 Clicking the link opens the email in Outlook. Drag several selected emails at
-once and each gets its own line.
+once and each gets its own line. Dragging a whole conversation, in a folder
+shown as conversations, links its newest message.
 
 Drag a folder from Outlook's folder pane and you get a link that opens that
 folder:

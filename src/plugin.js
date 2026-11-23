@@ -99,7 +99,7 @@ function parseJson(raw) {
 
 function folderFromPayload(payload) {
   const id = typeof payload.folderId === "string" ? payload.folderId.trim() : "";
-  if (!id || Array.isArray(payload.itemIds)) return null;
+  if (!id || Array.isArray(payload.itemIds) || Array.isArray(payload.latestItemIds)) return null;
   const name = typeof payload.displayName === "string" ? payload.displayName.replace(/\s+/g, " ").trim() : "";
   return [{ kind: "folder", id, name: name || "(Folder)", mailbox: mailboxAddress(payload.mailboxInfo) }];
 }
@@ -108,8 +108,12 @@ function mailboxAddress(info) {
   return info && typeof info.mailboxSmtpAddress === "string" ? info.mailboxSmtpAddress : "";
 }
 
+// A drag of messages carries "itemIds". A drag of conversation rows
+// ("multimaillistconversationrows", in folders shown as conversations)
+// carries "latestItemIds" instead: the newest message of each conversation,
+// which is what its link opens.
 function emailsFromPayload(payload) {
-  const ids = Array.isArray(payload.itemIds) ? payload.itemIds : [];
+  const ids = Array.isArray(payload.itemIds) ? payload.itemIds : Array.isArray(payload.latestItemIds) ? payload.latestItemIds : [];
   const subjects = Array.isArray(payload.subjects) ? payload.subjects : [];
   const messageIds = Array.isArray(payload.nodeIds) ? payload.nodeIds : [];
   const mailboxes = Array.isArray(payload.mailboxInfos) ? payload.mailboxInfos : [];
