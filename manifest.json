@@ -1,0 +1,10 @@
+{
+  "id": "outlook-email-links",
+  "name": "Outlook Email Links",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Drag an email from Outlook on the web or the Outlook app into a note to insert a link that opens it in Outlook. No sign-in.",
+  "author": "Au2mater",
+  "authorUrl": "https://github.com/Au2mater",
+  "isDesktopOnly": false
+}

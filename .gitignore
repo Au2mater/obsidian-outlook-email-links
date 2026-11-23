@@ -1,0 +1,4 @@
+node_modules/
+.DS_Store
+# Built from src/plugin.js by npm run build
+/main.js

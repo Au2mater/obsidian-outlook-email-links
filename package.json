@@ -1,0 +1,11 @@
+{
+  "name": "obsidian-outlook-email-links",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.js",
+    "test": "node test/run.js"
+  },
+  "version": "0.1.0",
+  "description": "Obsidian plugin: drag an email from Outlook on the web into a note to link to it.",
+  "license": "MIT"
+}
